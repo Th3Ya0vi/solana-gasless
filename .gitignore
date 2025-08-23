@@ -135,6 +135,9 @@ secrets/
 private/
 .private/
 
+# Documentation
+README.md
+
 # Temporary files
 tmp/
 temp/
