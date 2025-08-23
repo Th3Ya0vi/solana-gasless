@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-ink: #1c1c1c;
+  --color-brand: #ab91f2;
+  --color-paper: #fffdf8;
+
+  --color-yellow: #ffd13f;
+  --color-blue: #4a87f2;
+  --color-pink: #ffdadc;
+  --color-green: #2ec08b;
+  --color-lavender: #e2dffe;
+  --color-orange: #ff7243;
+  --color-vanilla: #fffcc4;
+  --color-plum: #3c315b;
+
+  --gray-100: #e8e6e2;
+  --gray-200: #d2d0cc;
+  --gray-300: #bbb9b6;
+  --gray-400: #a4a3a0;
+  --gray-500: #8d8c8a;
+
+  /* Derived tokens */
+  --text-default: var(--color-ink);
+  --text-muted: var(--gray-400);
+  --bg-page: var(--color-paper);
+  --bg-surface: #ffffff;
+  --border-subtle: var(--gray-100);
+  --focus-ring: var(--color-brand);
+  --link: var(--color-brand);
+  --success: var(--color-green);
+  --warning: var(--color-orange);
+  --info: var(--color-blue);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-page: #0f0f10;
+    --bg-surface: #141416;
+    --text-default: #f6f6f6;
+    --text-muted: #c9c9c9;
+    --border-subtle: #2a2a2b;
+  }
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  background-color: var(--bg-page);
+  color: var(--text-default);
+  line-height: 1.6;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+a:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+button:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
