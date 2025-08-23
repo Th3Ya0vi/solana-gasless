@@ -157,7 +157,12 @@ export default async function handler(
       )
     )
 
-    // Prepare metadata
+    // Prepare metadata with proper URI
+    const protocol = req.headers['x-forwarded-proto'] || 'http'
+    const host = req.headers.host
+    const baseUrl = `${protocol}://${host}`
+    const metadataUri = `${baseUrl}/api/metadata/${mintKeypair.publicKey.toString()}`
+    
     const metadata = {
       ...NFT_METADATA,
       properties: {
@@ -188,7 +193,7 @@ export default async function handler(
             data: {
               name: metadata.name,
               symbol: metadata.symbol,
-              uri: '', // In production, upload metadata to IPFS/Arweave
+              uri: metadataUri, // Points to our metadata API endpoint
               sellerFeeBasisPoints: 0,
               creators: metadata.properties?.creators?.map(creator => ({
                 address: new PublicKey(creator.address),
