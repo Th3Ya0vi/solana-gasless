@@ -9,14 +9,14 @@ import Head from 'next/head'
 import Image from 'next/image'
 
 export default function Home() {
-  const { publicKey, connected, sendTransaction } = useWallet()
+  const { publicKey, connected, signTransaction } = useWallet()
   const { connection } = useConnection()
   const [claimStatus, setClaimStatus] = useState<ClaimStatus>('idle')
   const [txSignature, setTxSignature] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const handleClaimNFT = async () => {
-    if (!connected || !publicKey || !sendTransaction) {
+    if (!connected || !publicKey || !signTransaction) {
       setError('Please connect your wallet first')
       return
     }
@@ -51,9 +51,16 @@ export default function Home() {
       const transactionBuffer = Buffer.from(data.transaction, 'base64')
       const transaction = Transaction.from(transactionBuffer)
 
-      // Step 3: User signs and sends the transaction
-      // Server pays all fees, but user authorizes the NFT claim
-      const signature = await sendTransaction(transaction, connection)
+      // Step 3: User signs the partially signed transaction
+      // Server already signed with fee payer + mint keypairs
+      // User signs to authorize the NFT creation
+      const signedTransaction = await signTransaction(transaction)
+
+      // Step 4: Send the fully signed transaction to the network
+      const signature = await connection.sendRawTransaction(signedTransaction.serialize())
+
+      // Step 5: Confirm the transaction
+      await connection.confirmTransaction(signature, 'confirmed')
 
       console.log('NFT claimed with user authorization:', {
         signature,
