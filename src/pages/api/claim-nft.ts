@@ -7,6 +7,7 @@ import {
   Transaction,
   SystemProgram,
   SYSVAR_RENT_PUBKEY,
+  TransactionInstruction,
 } from '@solana/web3.js'
 import {
   createCreateMetadataAccountV3Instruction,
@@ -220,6 +221,22 @@ export default async function handler(
         }
       )
     )
+
+    // Add memo instruction that requires user signature for authorization
+    // This ensures the user explicitly consents to the NFT claim
+    const memoText = `Authorize NFT claim for ${recipientPubkey.toString()}`
+    const memoInstruction = new TransactionInstruction({
+      keys: [
+        {
+          pubkey: recipientPubkey,
+          isSigner: true, // User MUST sign this instruction
+          isWritable: false, // No account modification, just authorization
+        },
+      ],
+      programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'), // Memo program ID
+      data: Buffer.from(memoText, 'utf8'),
+    })
+    transaction.add(memoInstruction)
 
     // Get latest blockhash
     const { blockhash } = await connection.getLatestBlockhash()
