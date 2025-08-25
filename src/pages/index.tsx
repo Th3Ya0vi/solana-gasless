@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
+import { Transaction } from '@solana/web3.js'
 import { Button } from '../components/Button'
 import { NFTCard } from '../components/NFTCard'
 import { ClaimStatus } from '../types'
@@ -8,14 +9,14 @@ import Head from 'next/head'
 import Image from 'next/image'
 
 export default function Home() {
-  const { publicKey, connected } = useWallet()
+  const { publicKey, connected, sendTransaction } = useWallet()
   const { connection } = useConnection()
   const [claimStatus, setClaimStatus] = useState<ClaimStatus>('idle')
   const [txSignature, setTxSignature] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const handleClaimNFT = async () => {
-    if (!connected || !publicKey) {
+    if (!connected || !publicKey || !sendTransaction) {
       setError('Please connect your wallet first')
       return
     }
@@ -25,7 +26,7 @@ export default function Home() {
     setTxSignature(null)
 
     try {
-      // Call API - server handles everything (truly gasless)
+      // Step 1: Get the partially signed transaction from the server
       const response = await fetch('/api/claim-nft', {
         method: 'POST',
         headers: {
@@ -39,16 +40,28 @@ export default function Home() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to claim NFT')
+        throw new Error(data.error || 'Failed to create NFT transaction')
       }
 
-      console.log('NFT claimed successfully (gasless):', {
-        signature: data.signature,
+      if (!data.transaction) {
+        throw new Error('No transaction returned from server')
+      }
+
+      // Step 2: Deserialize the transaction
+      const transactionBuffer = Buffer.from(data.transaction, 'base64')
+      const transaction = Transaction.from(transactionBuffer)
+
+      // Step 3: User signs and sends the transaction
+      // Server pays all fees, but user authorizes the NFT claim
+      const signature = await sendTransaction(transaction, connection)
+
+      console.log('NFT claimed with user authorization:', {
+        signature,
         mint: data.mintAddress,
         recipient: publicKey.toString(),
       })
 
-      setTxSignature(data.signature)
+      setTxSignature(signature)
       setClaimStatus('success')
     } catch (err) {
       console.error('Error claiming NFT:', err)

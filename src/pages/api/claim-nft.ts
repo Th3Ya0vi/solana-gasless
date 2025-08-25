@@ -26,6 +26,7 @@ import { ClaimRequest } from '../../types'
 
 interface ClaimResponse {
   success: boolean
+  transaction?: string // Base64 encoded transaction for user signing
   signature?: string
   mintAddress?: string
   error?: string
@@ -220,26 +221,32 @@ export default async function handler(
       )
     )
 
-    // Create the transaction completely server-side (truly gasless)
+    // Get latest blockhash
     const { blockhash } = await connection.getLatestBlockhash()
     transaction.recentBlockhash = blockhash
-    transaction.feePayer = feePayerKeypair.publicKey
+    transaction.feePayer = feePayerKeypair.publicKey // Server pays all fees
     
-    // Sign and send the transaction from the server
+    // Partially sign with server keypairs only
+    // User MUST sign to:
+    // 1. Authorize the NFT creation in their account
+    // 2. Provide explicit consent for the transaction
+    // 3. Follow web3 best practices for user authorization
+    // 4. Ensure legal compliance and audit trail
     transaction.partialSign(feePayerKeypair, mintKeypair)
     
-    const signature = await connection.sendRawTransaction(transaction.serialize())
-    await connection.confirmTransaction(signature, 'confirmed')
+    // Return transaction for user authorization
+    const serializedTransaction = transaction.serialize({
+      requireAllSignatures: false, // Allow missing user signature
+    })
 
-    console.log('NFT minted successfully (gasless):', {
-      signature,
+    console.log('NFT transaction created for user authorization:', {
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
     })
 
     return res.status(200).json({
       success: true,
-      signature,
+      transaction: Buffer.from(serializedTransaction).toString('base64'),
       mintAddress: mintKeypair.publicKey.toString(),
     })
   } catch (error) {
