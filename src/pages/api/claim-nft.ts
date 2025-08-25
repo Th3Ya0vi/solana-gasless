@@ -117,37 +117,11 @@ export default async function handler(
     // Get minimum balance for rent exemption
     const rentExemption = await getMinimumBalanceForRentExemptMint(connection)
 
-    // Step 1: Server pre-creates ATA (if needed) in separate transaction
-    const ataInfo = await connection.getAccountInfo(associatedTokenAddress)
-    if (!ataInfo) {
-      const ataTransaction = new Transaction()
-      ataTransaction.add(
-        createAssociatedTokenAccountInstruction(
-          feePayerKeypair.publicKey, // payer (server pays)
-          associatedTokenAddress,
-          recipientPubkey, // owner
-          mintKeypair.publicKey, // mint
-          TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        )
-      )
-      
-      const { blockhash: ataBlockhash } = await connection.getLatestBlockhash()
-      ataTransaction.recentBlockhash = ataBlockhash
-      ataTransaction.feePayer = feePayerKeypair.publicKey
-      ataTransaction.partialSign(feePayerKeypair) // Only fee payer signs for ATA creation
-      
-      const ataSignature = await connection.sendRawTransaction(ataTransaction.serialize())
-      await connection.confirmTransaction(ataSignature, 'confirmed')
-      
-      console.log('ATA pre-created by server:', ataSignature)
-    }
-
-    // Build main transaction (ATA already exists or was just created)
-    let transaction = new Transaction()
+    // Step 1: Server creates mint and metadata in separate transaction (no ATA yet)
+    const mintTransaction = new Transaction()
     
     // Add instruction to create mint account
-    transaction.add(
+    mintTransaction.add(
       SystemProgram.createAccount({
         fromPubkey: feePayerKeypair.publicKey,
         newAccountPubkey: mintKeypair.publicKey,
@@ -158,24 +132,12 @@ export default async function handler(
     )
 
     // Add instruction to initialize mint
-    transaction.add(
+    mintTransaction.add(
       createInitializeMintInstruction(
         mintKeypair.publicKey,
         0, // 0 decimals for NFT
         feePayerKeypair.publicKey, // mint authority
         feePayerKeypair.publicKey, // freeze authority
-        TOKEN_PROGRAM_ID
-      )
-    )
-
-    // Add instruction to mint token
-    transaction.add(
-      createMintToInstruction(
-        mintKeypair.publicKey,
-        associatedTokenAddress,
-        feePayerKeypair.publicKey,
-        1, // amount (1 for NFT)
-        [],
         TOKEN_PROGRAM_ID
       )
     )
@@ -200,7 +162,7 @@ export default async function handler(
     }
 
     // Add instruction to create metadata
-    transaction.add(
+    mintTransaction.add(
       createCreateMetadataAccountV3Instruction(
         {
           metadata: metadataAddress,
@@ -230,6 +192,58 @@ export default async function handler(
             collectionDetails: null,
           },
         }
+      )
+    )
+
+    // Execute mint and metadata creation
+    const { blockhash: mintBlockhash } = await connection.getLatestBlockhash()
+    mintTransaction.recentBlockhash = mintBlockhash
+    mintTransaction.feePayer = feePayerKeypair.publicKey
+    mintTransaction.partialSign(feePayerKeypair, mintKeypair)
+    
+    const mintSignature = await connection.sendRawTransaction(mintTransaction.serialize())
+    await connection.confirmTransaction(mintSignature, 'confirmed')
+    
+    console.log('Mint and metadata created by server:', mintSignature)
+
+    // Step 2: Create ATA now that mint exists (if needed)
+    const ataInfo = await connection.getAccountInfo(associatedTokenAddress)
+    if (!ataInfo) {
+      const ataTransaction = new Transaction()
+      ataTransaction.add(
+        createAssociatedTokenAccountInstruction(
+          feePayerKeypair.publicKey, // payer (server pays)
+          associatedTokenAddress,
+          recipientPubkey, // owner
+          mintKeypair.publicKey, // mint (now exists)
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      )
+      
+      const { blockhash: ataBlockhash } = await connection.getLatestBlockhash()
+      ataTransaction.recentBlockhash = ataBlockhash
+      ataTransaction.feePayer = feePayerKeypair.publicKey
+      ataTransaction.partialSign(feePayerKeypair)
+      
+      const ataSignature = await connection.sendRawTransaction(ataTransaction.serialize())
+      await connection.confirmTransaction(ataSignature, 'confirmed')
+      
+      console.log('ATA created by server:', ataSignature)
+    }
+
+    // Step 3: Build user transaction (just mint to ATA + memo)
+    let transaction = new Transaction()
+
+    // Add instruction to mint token to the ATA
+    transaction.add(
+      createMintToInstruction(
+        mintKeypair.publicKey,
+        associatedTokenAddress,
+        feePayerKeypair.publicKey,
+        1, // amount (1 for NFT)
+        [],
+        TOKEN_PROGRAM_ID
       )
     )
 
