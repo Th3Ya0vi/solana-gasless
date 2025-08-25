@@ -268,7 +268,8 @@ export default async function handler(
     transaction.feePayer = feePayerKeypair.publicKey // Server pays ALL fees
     
     // Server partially signs (handles all the actual minting)
-    transaction.partialSign(feePayerKeypair, mintKeypair)
+    // Only fee payer signs because it's the mint authority and fee payer
+    transaction.partialSign(feePayerKeypair)
     
     // Return transaction for user authorization signature
     const serializedTransaction = transaction.serialize({
