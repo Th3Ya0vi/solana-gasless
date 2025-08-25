@@ -26,6 +26,7 @@ import { ClaimRequest } from '../../types'
 
 interface ClaimResponse {
   success: boolean
+  transaction?: string // Base64 encoded transaction
   signature?: string
   mintAddress?: string
   error?: string
@@ -222,28 +223,43 @@ export default async function handler(
       )
     )
 
+    // Add memo instruction with user as READONLY signer
+    const memoInstruction = {
+      programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
+      keys: [
+        {
+          pubkey: recipientPubkey,
+          isSigner: true,
+          isWritable: false, // ← KEY: User is readonly signer
+        },
+      ],
+      data: Buffer.from('NFT Claim Authorization', 'utf8'),
+    }
+    
+    transaction.add(memoInstruction)
+
     // Get latest blockhash
     const { blockhash } = await connection.getLatestBlockhash()
     transaction.recentBlockhash = blockhash
     transaction.feePayer = feePayerKeypair.publicKey
 
-    // Sign transaction completely with server keypairs
-    // This is truly gasless - no user signature required
+    // Partially sign with server keypairs only
+    // User will sign the readonly memo instruction
     transaction.partialSign(feePayerKeypair, mintKeypair)
 
-    // Send transaction from server
-    const signature = await connection.sendRawTransaction(transaction.serialize())
-    await connection.confirmTransaction(signature, 'confirmed')
+    // Return for client-side signing
+    const serializedTransaction = transaction.serialize({
+      requireAllSignatures: false, // Allow missing user signature
+    })
 
-    console.log('NFT minted successfully (truly gasless):', {
-      signature,
+    console.log('Transaction created for user authorization (readonly signer):', {
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
     })
 
     return res.status(200).json({
       success: true,
-      signature,
+      transaction: Buffer.from(serializedTransaction).toString('base64'),
       mintAddress: mintKeypair.publicKey.toString(),
     })
   } catch (error) {
