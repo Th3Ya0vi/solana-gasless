@@ -26,10 +26,8 @@ import { ClaimRequest } from '../../types'
 
 interface ClaimResponse {
   success: boolean
-  transaction?: string // Base64 encoded transaction
   signature?: string
   mintAddress?: string
-  serverSignature?: string // Server transaction signature
   error?: string
 }
 import { NFT_METADATA } from '../../config/nft-metadata'
@@ -117,11 +115,11 @@ export default async function handler(
     // Get minimum balance for rent exemption
     const rentExemption = await getMinimumBalanceForRentExemptMint(connection)
 
-    // Build server transaction (everything except user authorization)
-    const serverTransaction = new Transaction()
+    // Build transaction
+    const transaction = new Transaction()
 
     // Add instruction to create mint account
-    serverTransaction.add(
+    transaction.add(
       SystemProgram.createAccount({
         fromPubkey: feePayerKeypair.publicKey,
         newAccountPubkey: mintKeypair.publicKey,
@@ -132,7 +130,7 @@ export default async function handler(
     )
 
     // Add instruction to initialize mint
-    serverTransaction.add(
+    transaction.add(
       createInitializeMintInstruction(
         mintKeypair.publicKey,
         0, // 0 decimals for NFT
@@ -145,7 +143,7 @@ export default async function handler(
     // Check if ATA already exists, create if needed
     const ataInfo = await connection.getAccountInfo(associatedTokenAddress)
     if (!ataInfo) {
-      serverTransaction.add(
+      transaction.add(
         createAssociatedTokenAccountInstruction(
           feePayerKeypair.publicKey, // payer (server pays)
           associatedTokenAddress,
@@ -158,7 +156,7 @@ export default async function handler(
     }
 
     // Add instruction to mint token
-    serverTransaction.add(
+    transaction.add(
       createMintToInstruction(
         mintKeypair.publicKey,
         associatedTokenAddress,
@@ -189,7 +187,7 @@ export default async function handler(
     }
 
     // Add instruction to create metadata
-    serverTransaction.add(
+    transaction.add(
       createCreateMetadataAccountV3Instruction(
         {
           metadata: metadataAddress,
@@ -222,54 +220,27 @@ export default async function handler(
       )
     )
 
-    // Step 1: Execute server transaction (mint + metadata creation)
-    const { blockhash: serverBlockhash } = await connection.getLatestBlockhash()
-    serverTransaction.recentBlockhash = serverBlockhash
-    serverTransaction.feePayer = feePayerKeypair.publicKey
-    serverTransaction.partialSign(feePayerKeypair, mintKeypair)
+    // Create the transaction completely server-side (truly gasless)
+    const { blockhash } = await connection.getLatestBlockhash()
+    transaction.recentBlockhash = blockhash
+    transaction.feePayer = feePayerKeypair.publicKey
     
-    const serverSignature = await connection.sendRawTransaction(serverTransaction.serialize())
-    await connection.confirmTransaction(serverSignature, 'confirmed')
-
-    // Step 2: Create user authorization transaction (just memo)
-    const userTransaction = new Transaction()
+    // Sign and send the transaction from the server
+    transaction.partialSign(feePayerKeypair, mintKeypair)
     
-    // Add memo instruction with user as READONLY signer
-    const memoInstruction = {
-      programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
-      keys: [
-        {
-          pubkey: recipientPubkey,
-          isSigner: true,
-          isWritable: false, // ← KEY: User is readonly signer
-        },
-      ],
-      data: Buffer.from(`NFT Claim Authorization: ${mintKeypair.publicKey.toString()}`, 'utf8'),
-    }
-    
-    userTransaction.add(memoInstruction)
+    const signature = await connection.sendRawTransaction(transaction.serialize())
+    await connection.confirmTransaction(signature, 'confirmed')
 
-    // Get latest blockhash for user transaction
-    const { blockhash: userBlockhash } = await connection.getLatestBlockhash()
-    userTransaction.recentBlockhash = userBlockhash
-    userTransaction.feePayer = feePayerKeypair.publicKey // Server still pays fees
-
-    // Return user transaction for signing
-    const serializedUserTransaction = userTransaction.serialize({
-      requireAllSignatures: false, // Allow missing user signature
-    })
-
-    console.log('NFT minted on server, user authorization required:', {
-      serverSignature,
+    console.log('NFT minted successfully (gasless):', {
+      signature,
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
     })
 
     return res.status(200).json({
       success: true,
-      transaction: Buffer.from(serializedUserTransaction).toString('base64'),
+      signature,
       mintAddress: mintKeypair.publicKey.toString(),
-      serverSignature, // Include server signature for reference
     })
   } catch (error) {
     console.error('Error minting NFT:', error)
