@@ -26,7 +26,7 @@ export default function Home() {
     setTxSignature(null)
 
     try {
-      // Step 1: Get the unsigned transaction from the API
+      // Step 1: Get partially signed transaction from server
       const response = await fetch('/api/claim-nft', {
         method: 'POST',
         headers: {
@@ -51,7 +51,7 @@ export default function Home() {
       const transactionBuffer = Buffer.from(data.transaction, 'base64')
       const transaction = Transaction.from(transactionBuffer)
 
-      // Step 3: Sign and send transaction using wallet
+      // Step 3: User signs and sends transaction (memo authorization only)
       const signature = await sendTransaction(transaction, connection)
 
       console.log('NFT minted successfully:', {

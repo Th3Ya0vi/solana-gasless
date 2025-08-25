@@ -22,6 +22,9 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
 } from '@solana/spl-token'
+import { 
+  createMemoInstruction,
+} from '@solana/spl-memo'
 import { ClaimRequest } from '../../types'
 
 interface ClaimResponse {
@@ -144,7 +147,7 @@ export default async function handler(
     // Add instruction to create associated token account
     transaction.add(
       createAssociatedTokenAccountInstruction(
-        feePayerKeypair.publicKey, // payer
+        feePayerKeypair.publicKey, // payer (server pays)
         associatedTokenAddress,
         recipientPubkey, // owner
         mintKeypair.publicKey, // mint
@@ -218,13 +221,12 @@ export default async function handler(
       )
     )
 
-    // Add a memo instruction to require user signature
+    // Add memo instruction for user authorization (no SOL cost)
     transaction.add(
-      SystemProgram.transfer({
-        fromPubkey: recipientPubkey,
-        toPubkey: recipientPubkey,
-        lamports: 0, // 0 SOL transfer to self - just to require user signature
-      })
+      createMemoInstruction(
+        `NFT Claim Authorization for ${recipientPubkey.toString()}`,
+        [recipientPubkey] // User must sign this instruction
+      )
     )
 
     // Get latest blockhash
@@ -232,16 +234,16 @@ export default async function handler(
     transaction.recentBlockhash = blockhash
     transaction.feePayer = feePayerKeypair.publicKey
 
-    // Partially sign transaction with fee payer and mint keypair
-    // User will need to sign when they receive the transaction
+    // Partially sign with server keypairs only
+    // User will sign the memo instruction on client side
     transaction.partialSign(feePayerKeypair, mintKeypair)
 
-    // Serialize the partially signed transaction for client signing
+    // Return unsigned transaction for client-side signing
     const serializedTransaction = transaction.serialize({
       requireAllSignatures: false, // Allow missing user signature
     })
 
-    console.log('NFT transaction created and signed:', {
+    console.log('NFT transaction created for user signing:', {
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
     })
