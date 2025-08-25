@@ -22,7 +22,15 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
 } from '@solana/spl-token'
-import { ClaimRequest, ClaimResponse } from '../../types'
+import { ClaimRequest } from '../../types'
+
+interface ClaimResponse {
+  success: boolean
+  transaction?: string // Base64 encoded unsigned transaction
+  mintAddress?: string
+  signature?: string
+  error?: string
+}
 import { NFT_METADATA } from '../../config/nft-metadata'
 import { isValidSolanaAddress, validateEnvVar, isValidPrivateKey, RateLimiter } from '../../utils/validation'
 
@@ -210,28 +218,38 @@ export default async function handler(
       )
     )
 
+    // Add a memo instruction to require user signature
+    transaction.add(
+      SystemProgram.transfer({
+        fromPubkey: recipientPubkey,
+        toPubkey: recipientPubkey,
+        lamports: 0, // 0 SOL transfer to self - just to require user signature
+      })
+    )
+
     // Get latest blockhash
     const { blockhash } = await connection.getLatestBlockhash()
     transaction.recentBlockhash = blockhash
     transaction.feePayer = feePayerKeypair.publicKey
 
-    // Sign transaction with fee payer and mint keypair
+    // Partially sign transaction with fee payer and mint keypair
+    // User will need to sign when they receive the transaction
     transaction.partialSign(feePayerKeypair, mintKeypair)
 
-    // Send and confirm transaction
-    const signature = await connection.sendRawTransaction(transaction.serialize())
-    await connection.confirmTransaction(signature, 'confirmed')
+    // Serialize the partially signed transaction for client signing
+    const serializedTransaction = transaction.serialize({
+      requireAllSignatures: false, // Allow missing user signature
+    })
 
-    console.log('NFT minted successfully:', {
-      signature,
+    console.log('NFT transaction created and signed:', {
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
     })
 
     return res.status(200).json({
       success: true,
-      signature,
-      mint: mintKeypair.publicKey.toString(),
+      transaction: Buffer.from(serializedTransaction).toString('base64'),
+      mintAddress: mintKeypair.publicKey.toString(),
     })
   } catch (error) {
     console.error('Error minting NFT:', error)

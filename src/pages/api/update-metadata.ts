@@ -5,6 +5,7 @@ import {
   Keypair,
   PublicKey,
   Transaction,
+  SystemProgram,
 } from '@solana/web3.js'
 import {
   createUpdateMetadataAccountV2Instruction,
@@ -22,10 +23,12 @@ if (!isValidPrivateKey(FEE_PAYER_PRIVATE_KEY)) {
 
 interface UpdateRequest {
   mintAddress: string
+  userPublicKey: string
 }
 
 interface UpdateResponse {
   success: boolean
+  transaction?: string // Base64 encoded unsigned transaction
   signature?: string
   error?: string
   metadataUri?: string
@@ -40,10 +43,14 @@ export default async function handler(
   }
 
   try {
-    const { mintAddress }: UpdateRequest = req.body
+    const { mintAddress, userPublicKey }: UpdateRequest = req.body
 
     if (!mintAddress) {
       return res.status(400).json({ success: false, error: 'Mint address is required' })
+    }
+
+    if (!userPublicKey) {
+      return res.status(400).json({ success: false, error: 'User public key is required' })
     }
 
     // Validate mint address
@@ -113,27 +120,38 @@ export default async function handler(
       )
     )
 
+    // Add user as a required signer by adding a 0 SOL transfer to themselves
+    const userPubkey = new PublicKey(userPublicKey)
+    transaction.add(
+      SystemProgram.transfer({
+        fromPubkey: userPubkey,
+        toPubkey: userPubkey,
+        lamports: 0, // 0 SOL transfer to require user signature
+      })
+    )
+
     // Get latest blockhash
     const { blockhash } = await connection.getLatestBlockhash()
     transaction.recentBlockhash = blockhash
     transaction.feePayer = feePayerKeypair.publicKey
 
-    // Sign transaction
+    // Partially sign transaction with fee payer only
+    // User will sign when they receive the transaction
     transaction.partialSign(feePayerKeypair)
 
-    // Send and confirm transaction
-    const signature = await connection.sendRawTransaction(transaction.serialize())
-    await connection.confirmTransaction(signature, 'confirmed')
+    // Serialize the partially signed transaction for client signing
+    const serializedTransaction = transaction.serialize({
+      requireAllSignatures: false, // Allow missing user signature
+    })
 
-    console.log('NFT metadata updated successfully:', {
-      signature,
+    console.log('Unsigned transaction created for metadata update:', {
       mint: mintAddress,
       metadataUri,
     })
 
     return res.status(200).json({
       success: true,
-      signature,
+      transaction: Buffer.from(serializedTransaction).toString('base64'),
       metadataUri,
     })
   } catch (error) {
@@ -144,3 +162,4 @@ export default async function handler(
     })
   }
 }
+
