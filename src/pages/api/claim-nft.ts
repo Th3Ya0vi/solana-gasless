@@ -27,10 +27,8 @@ import { ClaimRequest } from '../../types'
 
 interface ClaimResponse {
   success: boolean
-  transaction?: string // Base64 encoded authorization transaction for user signing
   signature?: string
   mintAddress?: string
-  serverSignature?: string // The actual minting transaction signature
   error?: string
 }
 import { NFT_METADATA } from '../../config/nft-metadata'
@@ -223,56 +221,26 @@ export default async function handler(
       )
     )
 
-    // Execute the complete minting transaction on the server (truly gasless)
+    // Execute the complete transaction on the server (truly gasless)
     const { blockhash } = await connection.getLatestBlockhash()
     transaction.recentBlockhash = blockhash
     transaction.feePayer = feePayerKeypair.publicKey
     
-    // Server signs and sends the minting transaction
+    // Server handles everything - completely gasless for user
     transaction.partialSign(feePayerKeypair, mintKeypair)
-    const mintSignature = await connection.sendRawTransaction(transaction.serialize())
-    await connection.confirmTransaction(mintSignature, 'confirmed')
+    const signature = await connection.sendRawTransaction(transaction.serialize())
+    await connection.confirmTransaction(signature, 'confirmed')
 
-    console.log('NFT minted successfully (server-side):', {
-      signature: mintSignature,
+    console.log('NFT minted successfully (gasless):', {
+      signature,
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
     })
 
-    // Create a separate memo transaction for user authorization
-    const authTransaction = new Transaction()
-    const memoText = `I authorize the NFT claim. Mint: ${mintKeypair.publicKey.toString()}`
-    const memoInstruction = new TransactionInstruction({
-      keys: [
-        {
-          pubkey: recipientPubkey,
-          isSigner: true, // User signs for authorization
-          isWritable: false, // No account changes, just authorization
-        },
-      ],
-      programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'), // Memo program ID
-      data: Buffer.from(memoText, 'utf8'),
-    })
-    authTransaction.add(memoInstruction)
-
-    // Get fresh blockhash for user authorization
-    const { blockhash: authBlockhash } = await connection.getLatestBlockhash()
-    authTransaction.recentBlockhash = authBlockhash
-    authTransaction.feePayer = feePayerKeypair.publicKey // Server pays memo fee too
-    
-    // Server partially signs to pay fees
-    authTransaction.partialSign(feePayerKeypair)
-    
-    // Return authorization transaction for user signature
-    const serializedAuthTransaction = authTransaction.serialize({
-      requireAllSignatures: false, // Allow missing user signature
-    })
-
     return res.status(200).json({
       success: true,
-      transaction: Buffer.from(serializedAuthTransaction).toString('base64'),
+      signature,
       mintAddress: mintKeypair.publicKey.toString(),
-      serverSignature: mintSignature, // The actual minting signature
     })
   } catch (error) {
     console.error('Error minting NFT:', error)

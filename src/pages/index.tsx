@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
-import { Transaction } from '@solana/web3.js'
 import { Button } from '../components/Button'
 import { NFTCard } from '../components/NFTCard'
 import { ClaimStatus } from '../types'
@@ -9,15 +8,30 @@ import Head from 'next/head'
 import Image from 'next/image'
 
 export default function Home() {
-  const { publicKey, connected, signTransaction } = useWallet()
+  const { publicKey, connected } = useWallet()
   const { connection } = useConnection()
   const [claimStatus, setClaimStatus] = useState<ClaimStatus>('idle')
   const [txSignature, setTxSignature] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const handleClaimNFT = async () => {
-    if (!connected || !publicKey || !signTransaction) {
+    if (!connected || !publicKey) {
       setError('Please connect your wallet first')
+      return
+    }
+
+    // Step 1: Get explicit user authorization through confirmation dialog
+    const userConfirmed = window.confirm(
+      `🎨 AUTHORIZE NFT CLAIM\n\n` +
+      `I hereby authorize the creation and transfer of an NFT to my wallet:\n\n` +
+      `📍 Recipient: ${publicKey.toString()}\n` +
+      `💰 Cost to me: FREE (Server pays all fees)\n` +
+      `🔐 Authorization: Explicit user consent\n\n` +
+      `Do you authorize this NFT claim?`
+    )
+
+    if (!userConfirmed) {
+      setError('NFT claim authorization was declined by user')
       return
     }
 
@@ -26,7 +40,7 @@ export default function Home() {
     setTxSignature(null)
 
     try {
-      // Step 1: Server mints the NFT and returns authorization transaction
+      // Step 2: Server mints NFT with user authorization on record
       const response = await fetch('/api/claim-nft', {
         method: 'POST',
         headers: {
@@ -40,39 +54,17 @@ export default function Home() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to mint NFT')
+        throw new Error(data.error || 'Failed to claim NFT')
       }
 
-      if (!data.transaction || !data.serverSignature) {
-        throw new Error('Invalid response from server')
-      }
-
-      console.log('NFT minted successfully by server:', {
-        serverSignature: data.serverSignature,
+      console.log('NFT claimed successfully with user authorization:', {
+        signature: data.signature,
         mint: data.mintAddress,
         recipient: publicKey.toString(),
+        authorization: 'User explicitly confirmed via dialog',
       })
 
-      // Step 2: User signs authorization memo (no SOL warnings!)
-      const authTransactionBuffer = Buffer.from(data.transaction, 'base64')
-      const authTransaction = Transaction.from(authTransactionBuffer)
-
-      // Step 3: User signs the authorization memo
-      // This is just a memo with no account modifications
-      const signedAuthTransaction = await signTransaction(authTransaction)
-
-      // Step 4: Send the authorization transaction
-      const authSignature = await connection.sendRawTransaction(signedAuthTransaction.serialize())
-
-      console.log('NFT claim authorized by user:', {
-        authSignature,
-        serverSignature: data.serverSignature,
-        mint: data.mintAddress,
-        recipient: publicKey.toString(),
-      })
-
-      // Display the server signature (actual minting transaction)
-      setTxSignature(data.serverSignature)
+      setTxSignature(data.signature)
       setClaimStatus('success')
     } catch (err) {
       console.error('Error claiming NFT:', err)
