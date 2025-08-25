@@ -22,16 +22,12 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
 } from '@solana/spl-token'
-import { 
-  createMemoInstruction,
-} from '@solana/spl-memo'
 import { ClaimRequest } from '../../types'
 
 interface ClaimResponse {
   success: boolean
-  transaction?: string // Base64 encoded unsigned transaction
-  mintAddress?: string
   signature?: string
+  mintAddress?: string
   error?: string
 }
 import { NFT_METADATA } from '../../config/nft-metadata'
@@ -106,6 +102,9 @@ export default async function handler(
       recipientPubkey
     )
 
+    // Check if ATA already exists
+    const ataInfo = await connection.getAccountInfo(associatedTokenAddress)
+    
     // Create metadata address
     const [metadataAddress] = PublicKey.findProgramAddressSync(
       [
@@ -144,17 +143,19 @@ export default async function handler(
       )
     )
 
-    // Add instruction to create associated token account
-    transaction.add(
-      createAssociatedTokenAccountInstruction(
-        feePayerKeypair.publicKey, // payer (server pays)
-        associatedTokenAddress,
-        recipientPubkey, // owner
-        mintKeypair.publicKey, // mint
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
+    // Only add ATA creation if it doesn't exist
+    if (!ataInfo) {
+      transaction.add(
+        createAssociatedTokenAccountInstruction(
+          feePayerKeypair.publicKey, // payer (server pays)
+          associatedTokenAddress,
+          recipientPubkey, // owner
+          mintKeypair.publicKey, // mint
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        )
       )
-    )
+    }
 
     // Add instruction to mint token
     transaction.add(
@@ -221,36 +222,28 @@ export default async function handler(
       )
     )
 
-    // Add memo instruction for user authorization (no SOL cost)
-    transaction.add(
-      createMemoInstruction(
-        `NFT Claim Authorization for ${recipientPubkey.toString()}`,
-        [recipientPubkey] // User must sign this instruction
-      )
-    )
-
     // Get latest blockhash
     const { blockhash } = await connection.getLatestBlockhash()
     transaction.recentBlockhash = blockhash
     transaction.feePayer = feePayerKeypair.publicKey
 
-    // Partially sign with server keypairs only
-    // User will sign the memo instruction on client side
+    // Sign transaction completely with server keypairs
+    // This is truly gasless - no user signature required
     transaction.partialSign(feePayerKeypair, mintKeypair)
 
-    // Return unsigned transaction for client-side signing
-    const serializedTransaction = transaction.serialize({
-      requireAllSignatures: false, // Allow missing user signature
-    })
+    // Send transaction from server
+    const signature = await connection.sendRawTransaction(transaction.serialize())
+    await connection.confirmTransaction(signature, 'confirmed')
 
-    console.log('NFT transaction created for user signing:', {
+    console.log('NFT minted successfully (truly gasless):', {
+      signature,
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
     })
 
     return res.status(200).json({
       success: true,
-      transaction: Buffer.from(serializedTransaction).toString('base64'),
+      signature,
       mintAddress: mintKeypair.publicKey.toString(),
     })
   } catch (error) {
