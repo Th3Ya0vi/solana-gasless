@@ -135,7 +135,7 @@ export default async function handler(
       const { blockhash: ataBlockhash } = await connection.getLatestBlockhash()
       ataTransaction.recentBlockhash = ataBlockhash
       ataTransaction.feePayer = feePayerKeypair.publicKey
-      ataTransaction.partialSign(feePayerKeypair, mintKeypair)
+      ataTransaction.partialSign(feePayerKeypair) // Only fee payer signs for ATA creation
       
       const ataSignature = await connection.sendRawTransaction(ataTransaction.serialize())
       await connection.confirmTransaction(ataSignature, 'confirmed')
