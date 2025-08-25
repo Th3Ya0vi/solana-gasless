@@ -27,9 +27,10 @@ import { ClaimRequest } from '../../types'
 
 interface ClaimResponse {
   success: boolean
-  transaction?: string // Base64 encoded transaction for user signing
+  transaction?: string // Base64 encoded authorization transaction for user signing
   signature?: string
   mintAddress?: string
+  serverSignature?: string // The actual minting transaction signature
   error?: string
 }
 import { NFT_METADATA } from '../../config/nft-metadata'
@@ -222,49 +223,56 @@ export default async function handler(
       )
     )
 
-    // Add memo instruction that requires user signature for authorization
-    // This ensures the user explicitly consents to the NFT claim
-    const memoText = `Authorize NFT claim for ${recipientPubkey.toString()}`
+    // Execute the complete minting transaction on the server (truly gasless)
+    const { blockhash } = await connection.getLatestBlockhash()
+    transaction.recentBlockhash = blockhash
+    transaction.feePayer = feePayerKeypair.publicKey
+    
+    // Server signs and sends the minting transaction
+    transaction.partialSign(feePayerKeypair, mintKeypair)
+    const mintSignature = await connection.sendRawTransaction(transaction.serialize())
+    await connection.confirmTransaction(mintSignature, 'confirmed')
+
+    console.log('NFT minted successfully (server-side):', {
+      signature: mintSignature,
+      mint: mintKeypair.publicKey.toString(),
+      recipient: walletAddress,
+    })
+
+    // Create a separate memo transaction for user authorization
+    const authTransaction = new Transaction()
+    const memoText = `I authorize the NFT claim. Mint: ${mintKeypair.publicKey.toString()}`
     const memoInstruction = new TransactionInstruction({
       keys: [
         {
           pubkey: recipientPubkey,
-          isSigner: true, // User MUST sign this instruction
-          isWritable: false, // No account modification, just authorization
+          isSigner: true, // User signs for authorization
+          isWritable: false, // No account changes, just authorization
         },
       ],
       programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'), // Memo program ID
       data: Buffer.from(memoText, 'utf8'),
     })
-    transaction.add(memoInstruction)
+    authTransaction.add(memoInstruction)
 
-    // Get latest blockhash
-    const { blockhash } = await connection.getLatestBlockhash()
-    transaction.recentBlockhash = blockhash
-    transaction.feePayer = feePayerKeypair.publicKey // Server pays all fees
+    // Get fresh blockhash for user authorization
+    const { blockhash: authBlockhash } = await connection.getLatestBlockhash()
+    authTransaction.recentBlockhash = authBlockhash
+    authTransaction.feePayer = feePayerKeypair.publicKey // Server pays memo fee too
     
-    // Partially sign with server keypairs only
-    // User MUST sign to:
-    // 1. Authorize the NFT creation in their account
-    // 2. Provide explicit consent for the transaction
-    // 3. Follow web3 best practices for user authorization
-    // 4. Ensure legal compliance and audit trail
-    transaction.partialSign(feePayerKeypair, mintKeypair)
+    // Server partially signs to pay fees
+    authTransaction.partialSign(feePayerKeypair)
     
-    // Return transaction for user authorization
-    const serializedTransaction = transaction.serialize({
+    // Return authorization transaction for user signature
+    const serializedAuthTransaction = authTransaction.serialize({
       requireAllSignatures: false, // Allow missing user signature
-    })
-
-    console.log('NFT transaction created for user authorization:', {
-      mint: mintKeypair.publicKey.toString(),
-      recipient: walletAddress,
     })
 
     return res.status(200).json({
       success: true,
-      transaction: Buffer.from(serializedTransaction).toString('base64'),
+      transaction: Buffer.from(serializedAuthTransaction).toString('base64'),
       mintAddress: mintKeypair.publicKey.toString(),
+      serverSignature: mintSignature, // The actual minting signature
     })
   } catch (error) {
     console.error('Error minting NFT:', error)

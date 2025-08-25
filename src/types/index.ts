@@ -29,8 +29,9 @@ export interface ClaimRequest {
 
 export interface ClaimResponse {
   success: boolean
-  transaction?: string // Base64 encoded transaction for user signing
+  transaction?: string // Base64 encoded authorization transaction for user signing
   signature?: string
   mintAddress?: string
+  serverSignature?: string // The actual minting transaction signature
   error?: string
 }

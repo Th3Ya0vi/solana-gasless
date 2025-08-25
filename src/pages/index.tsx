@@ -26,7 +26,7 @@ export default function Home() {
     setTxSignature(null)
 
     try {
-      // Step 1: Get the partially signed transaction from the server
+      // Step 1: Server mints the NFT and returns authorization transaction
       const response = await fetch('/api/claim-nft', {
         method: 'POST',
         headers: {
@@ -40,35 +40,39 @@ export default function Home() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create NFT transaction')
+        throw new Error(data.error || 'Failed to mint NFT')
       }
 
-      if (!data.transaction) {
-        throw new Error('No transaction returned from server')
+      if (!data.transaction || !data.serverSignature) {
+        throw new Error('Invalid response from server')
       }
 
-      // Step 2: Deserialize the transaction
-      const transactionBuffer = Buffer.from(data.transaction, 'base64')
-      const transaction = Transaction.from(transactionBuffer)
-
-      // Step 3: User signs the partially signed transaction
-      // Server already signed with fee payer + mint keypairs
-      // User signs to authorize the NFT creation
-      const signedTransaction = await signTransaction(transaction)
-
-      // Step 4: Send the fully signed transaction to the network
-      const signature = await connection.sendRawTransaction(signedTransaction.serialize())
-
-      // Step 5: Confirm the transaction
-      await connection.confirmTransaction(signature, 'confirmed')
-
-      console.log('NFT claimed with user authorization:', {
-        signature,
+      console.log('NFT minted successfully by server:', {
+        serverSignature: data.serverSignature,
         mint: data.mintAddress,
         recipient: publicKey.toString(),
       })
 
-      setTxSignature(signature)
+      // Step 2: User signs authorization memo (no SOL warnings!)
+      const authTransactionBuffer = Buffer.from(data.transaction, 'base64')
+      const authTransaction = Transaction.from(authTransactionBuffer)
+
+      // Step 3: User signs the authorization memo
+      // This is just a memo with no account modifications
+      const signedAuthTransaction = await signTransaction(authTransaction)
+
+      // Step 4: Send the authorization transaction
+      const authSignature = await connection.sendRawTransaction(signedAuthTransaction.serialize())
+
+      console.log('NFT claim authorized by user:', {
+        authSignature,
+        serverSignature: data.serverSignature,
+        mint: data.mintAddress,
+        recipient: publicKey.toString(),
+      })
+
+      // Display the server signature (actual minting transaction)
+      setTxSignature(data.serverSignature)
       setClaimStatus('success')
     } catch (err) {
       console.error('Error claiming NFT:', err)
