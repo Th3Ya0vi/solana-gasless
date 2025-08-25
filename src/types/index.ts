@@ -32,5 +32,6 @@ export interface ClaimResponse {
   transaction?: string // Base64 encoded transaction
   signature?: string
   mintAddress?: string
+  serverSignature?: string // Server transaction signature
   error?: string
 }

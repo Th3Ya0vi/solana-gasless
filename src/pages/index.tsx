@@ -54,8 +54,9 @@ export default function Home() {
       // Step 3: User signs readonly memo authorization
       const signature = await sendTransaction(transaction, connection)
 
-      console.log('NFT minted successfully with user authorization:', {
-        signature,
+      console.log('NFT claimed successfully with user authorization:', {
+        userSignature: signature,
+        serverSignature: data.serverSignature,
         mint: data.mintAddress,
         recipient: publicKey.toString(),
       })
