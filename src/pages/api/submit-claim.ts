@@ -73,13 +73,13 @@ export default async function handler(
 
     // Check fee payer balance before proceeding
     const feePayerBalance = await connection.getBalance(feePayerKeypair.publicKey)
-    const minimumBalance = 0.01 * 1e9 // 0.01 SOL in lamports
+    const minimumBalance = 0.1 * 1e9 // 0.1 SOL in lamports (increased for mainnet NFT transactions)
     
     if (feePayerBalance < minimumBalance) {
-      console.error('Fee payer balance too low:', feePayerBalance / 1e9, 'SOL')
+      console.error('Fee payer balance too low:', feePayerBalance / 1e9, 'SOL', 'Required:', minimumBalance / 1e9, 'SOL')
       return res.status(503).json({ 
         success: false, 
-        error: 'Service temporarily unavailable. Please try again later.' 
+        error: `Insufficient balance for NFT minting. Fee payer has ${(feePayerBalance / 1e9).toFixed(3)} SOL but needs at least ${(minimumBalance / 1e9).toFixed(1)} SOL for mainnet transactions.` 
       })
     }
 
@@ -132,6 +132,39 @@ export default async function handler(
       return res.status(400).json({ 
         success: false, 
         error: 'Transaction missing required signatures' 
+      })
+    }
+
+    // Calculate and log transaction fee estimate
+    const feeCalculator = await connection.getRecentBlockhash()
+    console.log('Fee payer balance before transaction:', feePayerBalance / 1e9, 'SOL')
+    console.log('Transaction details:', {
+      instructionCount: transaction.instructions.length,
+      signatures: transaction.signatures.length,
+      feePayer: transaction.feePayer?.toString(),
+      recentBlockhash: transaction.recentBlockhash,
+    })
+
+    // First simulate the transaction to get detailed error info
+    try {
+      const simulationResult = await connection.simulateTransaction(transaction)
+      console.log('Transaction simulation result:', {
+        success: !simulationResult.value.err,
+        error: simulationResult.value.err,
+        logs: simulationResult.value.logs?.slice(-5), // Last 5 logs
+      })
+      
+      if (simulationResult.value.err) {
+        return res.status(400).json({
+          success: false,
+          error: `Transaction simulation failed: ${JSON.stringify(simulationResult.value.err)}`,
+        })
+      }
+    } catch (simError) {
+      console.error('Transaction simulation error:', simError)
+      return res.status(400).json({
+        success: false,
+        error: `Transaction simulation failed: ${simError instanceof Error ? simError.message : 'Unknown error'}`,
       })
     }
 

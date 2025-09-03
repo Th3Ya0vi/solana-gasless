@@ -79,20 +79,30 @@ export default async function handler(
     // Initialize connection
     const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed')
 
+    // Check if recipient wallet exists on-chain (never had SOL = doesn't exist)
+    const recipientAccountInfo = await connection.getAccountInfo(recipientPubkey)
+    const recipientNeedsInitialization = !recipientAccountInfo
+
     // Initialize fee payer from private key
     const feePayerKeypair = Keypair.fromSecretKey(
       Uint8Array.from(JSON.parse(FEE_PAYER_PRIVATE_KEY))
     )
 
-    // Check fee payer balance
+    // Check fee payer balance (accounting for potential recipient initialization)
     const feePayerBalance = await connection.getBalance(feePayerKeypair.publicKey)
-    const minimumBalance = 0.01 * 1e9 // 0.01 SOL in lamports
+    const baseMinimum = 0.1 * 1e9 // Base minimum for NFT transaction
+    const initializationCost = recipientNeedsInitialization ? await connection.getMinimumBalanceForRentExemption(0) : 0
+    const minimumBalance = baseMinimum + initializationCost
     
     if (feePayerBalance < minimumBalance) {
-      console.error('Fee payer balance too low:', feePayerBalance / 1e9, 'SOL')
+      console.error('Fee payer balance too low:', feePayerBalance / 1e9, 'SOL', 'Required:', minimumBalance / 1e9, 'SOL', 'Including recipient init:', recipientNeedsInitialization)
+      const errorMsg = recipientNeedsInitialization 
+        ? `Insufficient balance for NFT minting. Fee payer has ${(feePayerBalance / 1e9).toFixed(3)} SOL but needs ${(minimumBalance / 1e9).toFixed(3)} SOL (includes ${(initializationCost / 1e9).toFixed(3)} SOL to initialize new wallet).`
+        : `Insufficient balance for NFT minting. Fee payer has ${(feePayerBalance / 1e9).toFixed(3)} SOL but needs at least ${(minimumBalance / 1e9).toFixed(1)} SOL for mainnet transactions.`
+      
       return res.status(503).json({ 
         success: false, 
-        error: 'Service temporarily unavailable. Please try again later.' 
+        error: errorMsg
       })
     }
 
@@ -120,6 +130,20 @@ export default async function handler(
 
     // Build the complete transaction (all instructions in one transaction)
     const transaction = new Transaction()
+    
+    // 0. If recipient wallet doesn't exist, initialize it with minimum SOL
+    if (recipientNeedsInitialization) {
+      const minBalanceForAccount = await connection.getMinimumBalanceForRentExemption(0) // Basic account
+      console.log(`Initializing recipient wallet ${walletAddress} with ${minBalanceForAccount / 1e9} SOL`)
+      
+      transaction.add(
+        SystemProgram.transfer({
+          fromPubkey: feePayerKeypair.publicKey,
+          toPubkey: recipientPubkey,
+          lamports: minBalanceForAccount,
+        })
+      )
+    }
     
     // 1. Add instruction to create mint account
     transaction.add(
@@ -252,7 +276,9 @@ export default async function handler(
     console.log('Transaction prepared for user signing:', {
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
+      recipientNeedsInitialization,
       ataToBeCreated: !ataInfo,
+      instructionCount: transaction.instructions.length,
     })
 
     return res.status(200).json({
