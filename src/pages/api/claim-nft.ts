@@ -27,11 +27,12 @@ import { ClaimRequest } from '../../types'
 
 interface ClaimResponse {
   success: boolean
-  transaction?: string // Base64 encoded transaction for user signing
-  signature?: string
+  transaction?: string // Base64 encoded unsigned transaction for user signing
   mintAddress?: string
+  mintKeypair?: string // Base64 encoded mint keypair for server signing later
   error?: string
 }
+
 import { NFT_METADATA } from '../../config/nft-metadata'
 import { isValidSolanaAddress, validateEnvVar, isValidPrivateKey, RateLimiter } from '../../utils/validation'
 
@@ -76,7 +77,7 @@ export default async function handler(
     const recipientPubkey = new PublicKey(walletAddress)
 
     // Initialize connection
-    const connection = new Connection(clusterApiUrl('devnet'), 'confirmed')
+    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed')
 
     // Initialize fee payer from private key
     const feePayerKeypair = Keypair.fromSecretKey(
@@ -117,11 +118,11 @@ export default async function handler(
     // Get minimum balance for rent exemption
     const rentExemption = await getMinimumBalanceForRentExemptMint(connection)
 
-    // Step 1: Server creates mint and metadata in separate transaction (no ATA yet)
-    const mintTransaction = new Transaction()
+    // Build the complete transaction (all instructions in one transaction)
+    const transaction = new Transaction()
     
-    // Add instruction to create mint account
-    mintTransaction.add(
+    // 1. Add instruction to create mint account
+    transaction.add(
       SystemProgram.createAccount({
         fromPubkey: feePayerKeypair.publicKey,
         newAccountPubkey: mintKeypair.publicKey,
@@ -131,8 +132,8 @@ export default async function handler(
       })
     )
 
-    // Add instruction to initialize mint
-    mintTransaction.add(
+    // 2. Add instruction to initialize mint
+    transaction.add(
       createInitializeMintInstruction(
         mintKeypair.publicKey,
         0, // 0 decimals for NFT
@@ -142,7 +143,7 @@ export default async function handler(
       )
     )
 
-    // Prepare metadata with proper URI
+    // 3. Prepare metadata with proper URI
     const protocol = req.headers['x-forwarded-proto'] || 'http'
     const host = req.headers.host
     const baseUrl = `${protocol}://${host}`
@@ -161,8 +162,8 @@ export default async function handler(
       },
     }
 
-    // Add instruction to create metadata
-    mintTransaction.add(
+    // 4. Add instruction to create metadata
+    transaction.add(
       createCreateMetadataAccountV3Instruction(
         {
           metadata: metadataAddress,
@@ -195,47 +196,22 @@ export default async function handler(
       )
     )
 
-    // Execute mint and metadata creation
-    const { blockhash: mintBlockhash } = await connection.getLatestBlockhash()
-    mintTransaction.recentBlockhash = mintBlockhash
-    mintTransaction.feePayer = feePayerKeypair.publicKey
-    mintTransaction.partialSign(feePayerKeypair, mintKeypair)
-    
-    const mintSignature = await connection.sendRawTransaction(mintTransaction.serialize())
-    await connection.confirmTransaction(mintSignature, 'confirmed')
-    
-    console.log('Mint and metadata created by server:', mintSignature)
-
-    // Step 2: Create ATA now that mint exists (if needed)
+    // 5. Check if ATA exists, if not add instruction to create it
     const ataInfo = await connection.getAccountInfo(associatedTokenAddress)
     if (!ataInfo) {
-      const ataTransaction = new Transaction()
-      ataTransaction.add(
+      transaction.add(
         createAssociatedTokenAccountInstruction(
           feePayerKeypair.publicKey, // payer (server pays)
           associatedTokenAddress,
           recipientPubkey, // owner
-          mintKeypair.publicKey, // mint (now exists)
+          mintKeypair.publicKey, // mint
           TOKEN_PROGRAM_ID,
           ASSOCIATED_TOKEN_PROGRAM_ID
         )
       )
-      
-      const { blockhash: ataBlockhash } = await connection.getLatestBlockhash()
-      ataTransaction.recentBlockhash = ataBlockhash
-      ataTransaction.feePayer = feePayerKeypair.publicKey
-      ataTransaction.partialSign(feePayerKeypair)
-      
-      const ataSignature = await connection.sendRawTransaction(ataTransaction.serialize())
-      await connection.confirmTransaction(ataSignature, 'confirmed')
-      
-      console.log('ATA created by server:', ataSignature)
     }
 
-    // Step 3: Build user transaction (just mint to ATA + memo)
-    let transaction = new Transaction()
-
-    // Add instruction to mint token to the ATA
+    // 6. Add instruction to mint token to the ATA
     transaction.add(
       createMintToInstruction(
         mintKeypair.publicKey,
@@ -247,48 +223,46 @@ export default async function handler(
       )
     )
 
-    // Add memo instruction for user authorization (no account modifications)
-    const memoText = `I authorize NFT mint: ${mintKeypair.publicKey.toString()}`
+    // 7. Add memo instruction for user authorization - this shouldn't trigger balance check
+    const memoText = `NFT Claim Authorization for ${mintKeypair.publicKey.toString()}`
     const memoInstruction = new TransactionInstruction({
       keys: [
         {
           pubkey: recipientPubkey,
-          isSigner: true, // User MUST sign for authorization
-          isWritable: false, // NO account modifications - just authorization
+          isSigner: true, // User signature required for authorization
+          isWritable: false, // Not modifying any accounts - just authorization
         },
       ],
-      programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
+      programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'), // Memo program
       data: Buffer.from(memoText, 'utf8'),
     })
     transaction.add(memoInstruction)
 
-    // Prepare transaction for user signing
+    // Set transaction metadata
     const { blockhash } = await connection.getLatestBlockhash()
     transaction.recentBlockhash = blockhash
     transaction.feePayer = feePayerKeypair.publicKey // Server pays ALL fees
     
-    // Server partially signs (handles all the actual minting)
-    // Only fee payer signs because it's the mint authority and fee payer
-    transaction.partialSign(feePayerKeypair)
-    
-    // Return transaction for user authorization signature
+    // Return unsigned transaction for user to sign first
     const serializedTransaction = transaction.serialize({
-      requireAllSignatures: false, // User signature still needed
+      requireAllSignatures: false, // Allow missing signatures
+      verifySignatures: false, // Don't verify since no signatures yet
     })
 
-    console.log('Transaction prepared for user authorization:', {
+    console.log('Transaction prepared for user signing:', {
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
-      ataPreCreated: !ataInfo,
+      ataToBeCreated: !ataInfo,
     })
 
     return res.status(200).json({
       success: true,
       transaction: Buffer.from(serializedTransaction).toString('base64'),
       mintAddress: mintKeypair.publicKey.toString(),
+      mintKeypair: Buffer.from(JSON.stringify(Array.from(mintKeypair.secretKey))).toString('base64'),
     })
   } catch (error) {
-    console.error('Error minting NFT:', error)
+    console.error('Error preparing NFT transaction:', error)
     return res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Internal server error',

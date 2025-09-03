@@ -62,7 +62,7 @@ export default async function handler(
     }
 
     // Initialize connection
-    const connection = new Connection(clusterApiUrl('devnet'), 'confirmed')
+    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed')
 
     // Initialize fee payer from private key
     const feePayerKeypair = Keypair.fromSecretKey(

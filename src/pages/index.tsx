@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useWallet, useConnection } from '@solana/wallet-adapter-react'
+import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { Transaction } from '@solana/web3.js'
 import { Button } from '../components/Button'
@@ -10,7 +10,6 @@ import Image from 'next/image'
 
 export default function Home() {
   const { publicKey, connected, signTransaction } = useWallet()
-  const { connection } = useConnection()
   const [claimStatus, setClaimStatus] = useState<ClaimStatus>('idle')
   const [txSignature, setTxSignature] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -26,7 +25,7 @@ export default function Home() {
     setTxSignature(null)
 
     try {
-      // Step 1: Get transaction from server (ATA pre-created if needed)
+      // Step 1: Get unsigned transaction from server
       const response = await fetch('/api/claim-nft', {
         method: 'POST',
         headers: {
@@ -40,31 +39,49 @@ export default function Home() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create NFT transaction')
+        throw new Error(data.error || 'Failed to prepare NFT transaction')
       }
 
-      if (!data.transaction) {
-        throw new Error('No transaction returned from server')
+      if (!data.transaction || !data.mintKeypair) {
+        throw new Error('Invalid response from server - missing transaction or mint keypair')
       }
 
-      // Step 2: Deserialize and sign the transaction
+      // Step 2: User signs transaction in Phantom dApp browser
       const transactionBuffer = Buffer.from(data.transaction, 'base64')
       const transaction = Transaction.from(transactionBuffer)
 
-      // Step 3: User signs transaction (memo authorization only, no account creation)
+      console.log('User signing transaction in Phantom dApp browser...')
       const signedTransaction = await signTransaction(transaction)
 
-      // Step 4: Send the fully signed transaction
-      const signature = await connection.sendRawTransaction(signedTransaction.serialize())
-      await connection.confirmTransaction(signature, 'confirmed')
-
-      console.log('NFT claimed with user signature:', {
-        signature,
-        mint: data.mintAddress,
-        recipient: publicKey.toString(),
+      // Step 3: Send user-signed transaction to server for fee payer signature and submission
+      const submitResponse = await fetch('/api/submit-claim', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          signedTransaction: Buffer.from(signedTransaction.serialize({
+            requireAllSignatures: false, // Allow missing server signatures
+            verifySignatures: false // Don't verify signatures during serialization
+          })).toString('base64'),
+          mintKeypair: data.mintKeypair,
+        }),
       })
 
-      setTxSignature(signature)
+      const submitData = await submitResponse.json()
+
+      if (!submitResponse.ok) {
+        throw new Error(submitData.error || 'Failed to submit NFT transaction')
+      }
+
+      console.log('NFT claimed with user-first signing:', {
+        signature: submitData.signature,
+        mint: submitData.mintAddress,
+        recipient: publicKey.toString(),
+        userSignedFirst: true,
+      })
+
+      setTxSignature(submitData.signature)
       setClaimStatus('success')
     } catch (err) {
       console.error('Error claiming NFT:', err)
@@ -152,7 +169,7 @@ export default function Home() {
                         </div>
                         {txSignature && (
                           <a
-                            href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
+                            href={`https://explorer.solana.com/tx/${txSignature}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-brand hover:underline text-sm"
