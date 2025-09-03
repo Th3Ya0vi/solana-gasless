@@ -77,7 +77,7 @@ export default async function handler(
     const recipientPubkey = new PublicKey(walletAddress)
 
     // Initialize connection
-    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed')
+    const connection = new Connection(clusterApiUrl('devnet'), 'confirmed')
 
     // Check if recipient wallet exists on-chain (never had SOL = doesn't exist)
     const recipientAccountInfo = await connection.getAccountInfo(recipientPubkey)
@@ -88,21 +88,36 @@ export default async function handler(
       Uint8Array.from(JSON.parse(FEE_PAYER_PRIVATE_KEY))
     )
 
-    // Check fee payer balance (accounting for potential recipient initialization)
+    // Initial balance check (we'll do detailed check after calculating actual costs)
     const feePayerBalance = await connection.getBalance(feePayerKeypair.publicKey)
-    const baseMinimum = 0.1 * 1e9 // Base minimum for NFT transaction
-    const initializationCost = recipientNeedsInitialization ? await connection.getMinimumBalanceForRentExemption(0) : 0
-    const minimumBalance = baseMinimum + initializationCost
+    const baseTransactionFee = 0.02 * 1e9 // Base transaction fees
+    const recipientInitCost = recipientNeedsInitialization ? await connection.getMinimumBalanceForRentExemption(0) : 0
     
-    if (feePayerBalance < minimumBalance) {
-      console.error('Fee payer balance too low:', feePayerBalance / 1e9, 'SOL', 'Required:', minimumBalance / 1e9, 'SOL', 'Including recipient init:', recipientNeedsInitialization)
-      const errorMsg = recipientNeedsInitialization 
-        ? `Insufficient balance for NFT minting. Fee payer has ${(feePayerBalance / 1e9).toFixed(3)} SOL but needs ${(minimumBalance / 1e9).toFixed(3)} SOL (includes ${(initializationCost / 1e9).toFixed(3)} SOL to initialize new wallet).`
-        : `Insufficient balance for NFT minting. Fee payer has ${(feePayerBalance / 1e9).toFixed(3)} SOL but needs at least ${(minimumBalance / 1e9).toFixed(1)} SOL for mainnet transactions.`
-      
+    console.log('Initial balance check:', {
+      currentBalance: (feePayerBalance / 1e9).toFixed(6),
+      baseTransactionFee: (baseTransactionFee / 1e9).toFixed(6),
+      recipientInitCost: (recipientInitCost / 1e9).toFixed(6),
+      recipientNeedsInit: recipientNeedsInitialization,
+    })
+    
+    // Calculate total costs including wallet funding
+    const walletFundingCost = recipientNeedsInitialization ? 
+      (await connection.getMinimumBalanceForRentExemption(0)) + (0.01 * 1e9) : 0 // rent + buffer
+    
+    const totalCost = baseTransactionFee + walletFundingCost + (0.01 * 1e9) // extra buffer for ATA
+    
+    console.log('💰 Cost breakdown:', {
+      baseTransactionFee: (baseTransactionFee / 1e9).toFixed(6),
+      walletFunding: (walletFundingCost / 1e9).toFixed(6),
+      ataBuffer: ((0.01 * 1e9) / 1e9).toFixed(6),
+      totalRequired: (totalCost / 1e9).toFixed(6),
+      currentBalance: (feePayerBalance / 1e9).toFixed(6),
+    })
+    
+    if (feePayerBalance < totalCost) {
       return res.status(503).json({ 
         success: false, 
-        error: errorMsg
+        error: `Insufficient balance: Fee payer has ${(feePayerBalance / 1e9).toFixed(6)} SOL but needs ${(totalCost / 1e9).toFixed(6)} SOL for gasless NFT transactions with wallet funding.`
       })
     }
 
@@ -131,18 +146,26 @@ export default async function handler(
     // Build the complete transaction (all instructions in one transaction)
     const transaction = new Transaction()
     
-    // 0. If recipient wallet doesn't exist, initialize it with minimum SOL
+    // 0. Pre-fund new wallets with enough SOL to avoid "not enough SOL" warnings
     if (recipientNeedsInitialization) {
       const minBalanceForAccount = await connection.getMinimumBalanceForRentExemption(0) // Basic account
-      console.log(`Initializing recipient wallet ${walletAddress} with ${minBalanceForAccount / 1e9} SOL`)
+      const transactionBuffer = 0.01 * 1e9 // 0.01 SOL buffer for transaction fees
+      const totalAirdrop = minBalanceForAccount + transactionBuffer
+      
+      console.log(`🏦 NEW WALLET: Pre-funding ${walletAddress} with ${totalAirdrop / 1e9} SOL`)
+      console.log(`   - Rent exemption: ${minBalanceForAccount / 1e9} SOL`)
+      console.log(`   - Transaction buffer: ${transactionBuffer / 1e9} SOL`)
+      console.log(`   - Total: ${totalAirdrop / 1e9} SOL (SERVER PAYS)`)
       
       transaction.add(
         SystemProgram.transfer({
-          fromPubkey: feePayerKeypair.publicKey,
-          toPubkey: recipientPubkey,
-          lamports: minBalanceForAccount,
+          fromPubkey: feePayerKeypair.publicKey, // ← SERVER pays for wallet funding
+          toPubkey: recipientPubkey, // ← NEW WALLET receives SOL
+          lamports: totalAirdrop, // ← Enough for rent + transaction fees
         })
       )
+    } else {
+      console.log(`✅ EXISTING WALLET: ${walletAddress} already exists on-chain`)
     }
     
     // 1. Add instruction to create mint account
@@ -220,19 +243,26 @@ export default async function handler(
       )
     )
 
-    // 5. Check if ATA exists, if not add instruction to create it
+    // 5. Check if ATA exists, if not add instruction to create it (server pays all costs)
     const ataInfo = await connection.getAccountInfo(associatedTokenAddress)
-    if (!ataInfo) {
+    const ataWillBeCreated = !ataInfo
+    if (ataWillBeCreated) {
+      const ataRentCost = await connection.getMinimumBalanceForRentExemption(165) // ATA account size
+      console.log(`ATA doesn't exist for recipient. Server will create it.`)
+      console.log(`ATA creation cost: ${(ataRentCost / 1e9).toFixed(6)} SOL (paid by server)`)
+      
       transaction.add(
         createAssociatedTokenAccountInstruction(
-          feePayerKeypair.publicKey, // payer (server pays)
+          feePayerKeypair.publicKey, // payer (server pays ALL costs including ATA rent)
           associatedTokenAddress,
-          recipientPubkey, // owner
+          recipientPubkey, // owner (recipient)
           mintKeypair.publicKey, // mint
           TOKEN_PROGRAM_ID,
           ASSOCIATED_TOKEN_PROGRAM_ID
         )
       )
+    } else {
+      console.log('ATA already exists for recipient - no creation needed')
     }
 
     // 6. Add instruction to mint token to the ATA
@@ -247,25 +277,35 @@ export default async function handler(
       )
     )
 
-    // 7. Add memo instruction for user authorization - this shouldn't trigger balance check
-    const memoText = `NFT Claim Authorization for ${mintKeypair.publicKey.toString()}`
+    // 7. User authorization via read-only memo (absolutely no balance requirements)
     const memoInstruction = new TransactionInstruction({
       keys: [
         {
           pubkey: recipientPubkey,
-          isSigner: true, // User signature required for authorization
-          isWritable: false, // Not modifying any accounts - just authorization
+          isSigner: true,    // User must sign for authorization
+          isWritable: false, // CRITICAL: Read-only = no balance check
         },
       ],
-      programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'), // Memo program
-      data: Buffer.from(memoText, 'utf8'),
+      programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
+      data: Buffer.from(`Auth:${mintKeypair.publicKey.toString().slice(0, 8)}`, 'utf8'),
     })
     transaction.add(memoInstruction)
+    
+    console.log('✍️ Added read-only memo for user authorization (zero balance required)')
 
-    // Set transaction metadata
+    // Set transaction metadata with server as fee payer for EVERYTHING
     const { blockhash } = await connection.getLatestBlockhash()
     transaction.recentBlockhash = blockhash
-    transaction.feePayer = feePayerKeypair.publicKey // Server pays ALL fees
+    transaction.feePayer = feePayerKeypair.publicKey // Server pays ALL fees and rent
+    
+    console.log('📋 Transaction prepared for user signing in Phantom dApp browser:', {
+      feePayer: transaction.feePayer?.toString(),
+      serverPaysAllCosts: true,
+      userSignsForAuth: true,
+      instructionCount: transaction.instructions.length,
+      newWalletInitialization: recipientNeedsInitialization,
+      ataWillBeCreated,
+    })
     
     // Return unsigned transaction for user to sign first
     const serializedTransaction = transaction.serialize({
@@ -273,12 +313,10 @@ export default async function handler(
       verifySignatures: false, // Don't verify since no signatures yet
     })
 
-    console.log('Transaction prepared for user signing:', {
+    console.log('✅ Returning unsigned transaction for user authorization in Phantom:', {
       mint: mintKeypair.publicKey.toString(),
       recipient: walletAddress,
-      recipientNeedsInitialization,
-      ataToBeCreated: !ataInfo,
-      instructionCount: transaction.instructions.length,
+      serverWillPayAllCosts: true,
     })
 
     return res.status(200).json({

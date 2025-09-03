@@ -37,7 +37,7 @@ function generateFeePayerKeypair() {
 FEE_PAYER_PRIVATE_KEY=${JSON.stringify(Array.from(keypair.secretKey))}
 
 # Optional: Custom RPC endpoint
-# SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+# SOLANA_RPC_URL=https://api.devnet.solana.com
 `
   
   if (!fs.existsSync(envPath)) {
@@ -49,9 +49,8 @@ FEE_PAYER_PRIVATE_KEY=${JSON.stringify(Array.from(keypair.secretKey))}
   }
   
   console.log('\n📋 Next Steps:')
-  console.log('1. Fund your fee payer wallet with SOL (mainnet-beta for production):')
-  console.log(`   # Note: You need to fund this wallet with real SOL on mainnet-beta`)
-  console.log(`   # Public key: ${keypair.publicKey.toString()}`)
+  console.log('1. Fund your fee payer wallet with SOL (devnet for testing):')
+  console.log(`   solana airdrop 2 ${keypair.publicKey.toString()} --url devnet`)
   console.log('2. Install dependencies:')
   console.log('   npm install')
   console.log('3. Start the development server:')
@@ -61,8 +60,8 @@ FEE_PAYER_PRIVATE_KEY=${JSON.stringify(Array.from(keypair.secretKey))}
   console.log('- Never commit your private key to version control')
   console.log('- Use a dedicated wallet for fee paying in production')
   console.log('- Monitor your fee payer balance regularly')
-  console.log('- ⚠️  MAINNET WARNING: This wallet will need real SOL funding!')
-  console.log('- Each NFT mint transaction will cost real SOL fees')
+  console.log('- 🇿  DEVNET: Free SOL airdrops available for testing!')
+  console.log('- Each NFT mint transaction will cost test SOL (free)')
   console.log('\n🎉 Setup complete! Happy minting!')
 }
 

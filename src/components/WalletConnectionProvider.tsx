@@ -23,7 +23,7 @@ const WalletConnectionProvider: FC<WalletConnectionProviderProps> = ({
   children,
 }) => {
   // You can also provide a custom RPC endpoint
-  const endpoint = useMemo(() => clusterApiUrl('mainnet-beta'), [])
+  const endpoint = useMemo(() => clusterApiUrl('devnet'), [])
 
   // @solana/wallet-adapter-wallets includes all the adapters but supports tree shaking
   const wallets = useMemo(

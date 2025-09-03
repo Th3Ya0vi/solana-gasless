@@ -49,7 +49,7 @@ export default async function handler(
     }
 
     // Initialize connection
-    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed')
+    const connection = new Connection(clusterApiUrl('devnet'), 'confirmed')
 
     // Initialize fee payer from private key
     const feePayerKeypair = Keypair.fromSecretKey(
@@ -71,15 +71,15 @@ export default async function handler(
       feePayer: feePayerKeypair.publicKey.toString(),
     })
 
-    // Check fee payer balance before proceeding
+    // Check fee payer balance before proceeding  
     const feePayerBalance = await connection.getBalance(feePayerKeypair.publicKey)
-    const minimumBalance = 0.1 * 1e9 // 0.1 SOL in lamports (increased for mainnet NFT transactions)
+    const minimumBalance = 0.02 * 1e9 // 0.02 SOL in lamports (reduced - transaction is mostly pre-funded)
     
     if (feePayerBalance < minimumBalance) {
       console.error('Fee payer balance too low:', feePayerBalance / 1e9, 'SOL', 'Required:', minimumBalance / 1e9, 'SOL')
       return res.status(503).json({ 
         success: false, 
-        error: `Insufficient balance for NFT minting. Fee payer has ${(feePayerBalance / 1e9).toFixed(3)} SOL but needs at least ${(minimumBalance / 1e9).toFixed(1)} SOL for mainnet transactions.` 
+        error: `Insufficient balance for transaction submission. Fee payer has ${(feePayerBalance / 1e9).toFixed(6)} SOL but needs at least ${(minimumBalance / 1e9).toFixed(3)} SOL for mainnet transactions.` 
       })
     }
 
@@ -145,26 +145,37 @@ export default async function handler(
       recentBlockhash: transaction.recentBlockhash,
     })
 
+    // Get current balance right before submission
+    const currentBalance = await connection.getBalance(feePayerKeypair.publicKey)
+    console.log('Final balance check before submission:', {
+      feePayerBalance: (currentBalance / 1e9).toFixed(9),
+      feePayer: feePayerKeypair.publicKey.toString(),
+    })
+
     // First simulate the transaction to get detailed error info
     try {
+      console.log('Simulating fully signed transaction...')
       const simulationResult = await connection.simulateTransaction(transaction)
+      
       console.log('Transaction simulation result:', {
         success: !simulationResult.value.err,
         error: simulationResult.value.err,
-        logs: simulationResult.value.logs?.slice(-5), // Last 5 logs
+        logs: simulationResult.value.logs,
+        unitsConsumed: simulationResult.value.unitsConsumed,
+        accounts: simulationResult.value.accounts?.length,
       })
       
       if (simulationResult.value.err) {
         return res.status(400).json({
           success: false,
-          error: `Transaction simulation failed: ${JSON.stringify(simulationResult.value.err)}`,
+          error: `Transaction simulation failed: ${JSON.stringify(simulationResult.value.err)}. Fee payer balance: ${(currentBalance / 1e9).toFixed(6)} SOL`,
         })
       }
     } catch (simError) {
       console.error('Transaction simulation error:', simError)
       return res.status(400).json({
         success: false,
-        error: `Transaction simulation failed: ${simError instanceof Error ? simError.message : 'Unknown error'}`,
+        error: `Transaction simulation failed: ${simError instanceof Error ? simError.message : 'Unknown error'}. Fee payer balance: ${(currentBalance / 1e9).toFixed(6)} SOL`,
       })
     }
 

@@ -169,7 +169,7 @@ export default function Home() {
                         </div>
                         {txSignature && (
                           <a
-                            href={`https://explorer.solana.com/tx/${txSignature}`}
+                            href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-brand hover:underline text-sm"
